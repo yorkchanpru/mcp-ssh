@@ -1,0 +1,13 @@
+{
+  "name": "mcp-ssh-example",
+  "version": "1.0.0",
+  "description": "Example of using MCP SSH server",
+  "type": "module",
+  "main": "basic-usage.js",
+  "scripts": {
+    "start": "node basic-usage.js"
+  },
+  "dependencies": {
+    "mcp-ssh": "file:../"
+  }
+} 
