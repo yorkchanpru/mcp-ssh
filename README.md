@@ -92,7 +92,8 @@ To use this with Claude Desktop, add the following to your `claude_desktop_confi
       "command": "npx",
       "args": [
         "-y",
-        "@york.chan.pru/mcp-ssh"
+        "@york.chan.pru/mcp-ssh", 
+        "--stdio"
       ]
     }
   }
