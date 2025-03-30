@@ -1,6 +1,6 @@
 {
-  "name": "mcp-ssh",
-  "version": "1.0.0",
+  "name": "@yorkchanpru/mcp-ssh",
+  "version": "0.0.1",
   "description": "MCP server for SSH access to remote virtual machines",
   "type": "module",
   "main": "dist/index.js",
@@ -57,10 +57,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourusername/mcp-ssh.git"
+    "url": "git+https://github.com/yorkchanpru/mcp-ssh.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/mcp-ssh/issues"
+    "url": "https://github.com/yorkchanpru/mcp-ssh/issues"
   },
-  "homepage": "https://github.com/yourusername/mcp-ssh#readme"
+  "homepage": "https://github.com/yorkchanpru/mcp-ssh#readme"
 }
