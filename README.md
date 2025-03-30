@@ -92,7 +92,7 @@ To use this with Claude Desktop, add the following to your `claude_desktop_confi
       "command": "npx",
       "args": [
         "-y",
-        "mcp-ssh"
+        "@york.chan.pru/mcp-ssh"
       ]
     }
   }
@@ -104,13 +104,13 @@ To use this with Claude Desktop, add the following to your `claude_desktop_confi
 ### NPM
 
 ```bash
-npm install mcp-ssh
+npm install @york.chan.pru/mcp-ssh
 ```
 
 ### Direct Usage
 
 ```javascript
-import { startServer } from 'mcp-ssh';
+import { startServer } from '@york.chan.pru/mcp-ssh';
 
 // Start with default options
 startServer();
@@ -151,7 +151,7 @@ docker build -t mcp/ssh .
 The package includes a CLI command:
 
 ```bash
-npx mcp-ssh
+npx @york.chan.pru/mcp-ssh
 ```
 
 Environment variables for configuration:
@@ -177,13 +177,13 @@ Console logs are formatted with timestamps and optional colors for better readab
 To run with verbose logging:
 
 ```bash
-MCP_SSH_LOG_LEVEL=debug npx mcp-ssh
+MCP_SSH_LOG_LEVEL=debug npx @york.chan.pru/mcp-ssh
 ```
 
 To disable pretty printing (for machine parsing):
 
 ```bash
-MCP_SSH_PRETTY_PRINT=false npx mcp-ssh
+MCP_SSH_PRETTY_PRINT=false npx @york.chan.pru/mcp-ssh
 ```
 
 ## Security Considerations

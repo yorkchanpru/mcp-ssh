@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "rimraf dist && tsc",
-    "start": "node dist/cli.js",
+    "start": "node dist/cli.js --stdio",
     "dev": "nodemon --watch 'src/**/*.ts' --exec 'node --loader ts-node/esm' src/cli.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
     "prepublishOnly": "npm run build",
