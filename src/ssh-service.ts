@@ -48,27 +48,43 @@ export interface SshCommandResult {
 }
 
 /**
- * Result of a file upload operation
+ * Result of uploading a file via SSH
  */
 export interface SshUploadResult {
   /** Whether the upload was successful */
   success: boolean;
-  /** Remote path where file was uploaded */
+  /** Path on the remote server */
   remotePath: string;
-  /** Error message if upload failed */
-  error?: string;
 }
 
 /**
- * Result of a file download operation
+ * Result of downloading a file via SSH
  */
 export interface SshDownloadResult {
   /** Whether the download was successful */
   success: boolean;
-  /** Content of the downloaded file */
+  /** File content */
   content: string;
-  /** Error message if download failed */
-  error?: string;
+}
+
+/**
+ * Result of extracting logs from a file
+ */
+export interface SshLogExtractResult {
+  /** Whether the extraction was successful */
+  success: boolean;
+  /** Extracted log content */
+  content: string;
+  /** Number of lines extracted */
+  lineCount: number;
+  /** First line number in the extraction (1-indexed) */
+  startLine?: number;
+  /** Last line number in the extraction (1-indexed) */
+  endLine?: number;
+  /** Timestamp of the first line (if time-based extraction) */
+  startTime?: string;
+  /** Timestamp of the last line (if time-based extraction) */
+  endTime?: string;
 }
 
 /**
@@ -376,6 +392,169 @@ export class SshService {
     // Disconnect all sessions
     for (const id of this.sessions.keys()) {
       this.disconnect(id);
+    }
+  }
+
+  /**
+   * Extract logs from a file by line number range
+   * @param sessionId Session ID
+   * @param filePath Path to the log file on the remote server
+   * @param startLine Starting line number (1-indexed)
+   * @param endLine Ending line number (1-indexed, optional)
+   * @returns Promise resolving to log extraction result
+   */
+  public async extractLogsByLineRange(
+    sessionId: string,
+    filePath: string,
+    startLine: number,
+    endLine?: number,
+  ): Promise<SshLogExtractResult> {
+    const session = this.getSession(sessionId);
+    session.lastActivity = Date.now();
+
+    try {
+      // Create a command to extract lines based on line numbers
+      const lineCount = endLine ? endLine - startLine + 1 : undefined;
+      const command = lineCount ? `head -n ${endLine} ${filePath} | tail -n ${lineCount}` : `tail -n +${startLine} ${filePath}`;
+
+      const result = await this.executeCommand(sessionId, command);
+
+      if (result.exitCode !== 0) {
+        throw new Error(`Failed to extract logs: ${result.stderr}`);
+      }
+
+      return {
+        success: true,
+        content: result.stdout,
+        lineCount: result.stdout.split("\n").length,
+        startLine,
+        endLine,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        content: error instanceof Error ? error.message : String(error),
+        lineCount: 0,
+      };
+    }
+  }
+
+  /**
+   * Extract logs from a file by time range
+   * @param sessionId Session ID
+   * @param filePath Path to the log file on the remote server
+   * @param targetTime Target time string to search for
+   * @param timePattern Regular expression pattern to extract time from log lines
+   * @param minutesRange Number of minutes before and after the target time to include
+   * @returns Promise resolving to log extraction result
+   */
+  public async extractLogsByTimeRange(
+    sessionId: string,
+    filePath: string,
+    targetTime: string,
+    timePattern: string,
+    minutesRange: number,
+  ): Promise<SshLogExtractResult> {
+    const session = this.getSession(sessionId);
+    session.lastActivity = Date.now();
+
+    try {
+      // First, create a script that will extract logs based on a time range
+      const extractScript = `
+#!/bin/bash
+log_file="${filePath}"
+target_time="${targetTime}"
+time_pattern="${timePattern}"
+minutes_range=${minutesRange}
+
+# Convert target time to timestamp
+if ! target_timestamp=$(date -d "$target_time" +%s 2>/dev/null); then
+  echo "Error: Invalid target time format." >&2
+  exit 1
+fi
+
+# Calculate the range boundaries
+range_start=$((target_timestamp - minutes_range * 60))
+range_end=$((target_timestamp + minutes_range * 60))
+
+matching_lines=""
+start_time=""
+end_time=""
+line_count=0
+in_range=false
+
+while IFS= read -r line; do
+  # Extract timestamp using the provided pattern
+  if timestamp_str=$(echo "$line" | grep -o -E "$time_pattern"); then
+    if ! line_timestamp=$(date -d "$timestamp_str" +%s 2>/dev/null); then
+      # Skip lines where time conversion fails
+      continue
+    fi
+    
+    # Check if this line is within the time range
+    if (( line_timestamp >= range_start && line_timestamp <= range_end )); then
+      if [[ -z "$matching_lines" ]]; then
+        start_time="$timestamp_str"
+      fi
+      end_time="$timestamp_str"
+      matching_lines="$matching_lines$line\\n"
+      ((line_count++))
+      in_range=true
+    elif [[ "$in_range" == "true" && line_timestamp > range_end ]]; then
+      # We've gone past the end of the range, no need to continue
+      break
+    fi
+  elif [[ "$in_range" == "true" ]]; then
+    # Include lines that don't have a timestamp but are within a matching section
+    matching_lines="$matching_lines$line\\n"
+    ((line_count++))
+  fi
+done < "$log_file"
+
+# Output the result as JSON for easy parsing
+cat << EOF
+{
+  "lineCount": $line_count,
+  "startTime": "$start_time",
+  "endTime": "$end_time",
+  "content": "$matching_lines"
+}
+EOF
+`;
+
+      // Upload the extraction script
+      const scriptPath = `/tmp/extract_logs_${Date.now()}.sh`;
+      await this.uploadFile(sessionId, extractScript, scriptPath);
+
+      // Make the script executable
+      await this.executeCommand(sessionId, `chmod +x ${scriptPath}`);
+
+      // Execute the script
+      const result = await this.executeCommand(sessionId, scriptPath);
+
+      // Clean up
+      await this.executeCommand(sessionId, `rm ${scriptPath}`);
+
+      if (result.exitCode !== 0) {
+        throw new Error(`Failed to extract logs: ${result.stderr}`);
+      }
+
+      // Parse the JSON result
+      const extractionResult = JSON.parse(result.stdout);
+
+      return {
+        success: true,
+        content: extractionResult.content.replace(/\\n/g, "\n"),
+        lineCount: extractionResult.lineCount,
+        startTime: extractionResult.startTime,
+        endTime: extractionResult.endTime,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        content: error instanceof Error ? error.message : String(error),
+        lineCount: 0,
+      };
     }
   }
 }

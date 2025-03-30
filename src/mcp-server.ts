@@ -5,9 +5,12 @@ import { McpSshServerOptions } from "./types.js";
 import express from "express";
 import cors from "cors";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createServer } from "http";
 import path from "path";
 import { createCustomLogger, logger as defaultLogger } from "./logger.js";
+import { GetPromptRequestSchema, ListPromptsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { LOG_ANALYSIS_PROMPTS, PROMPT_GENERATORS } from "./prompts.js";
 
 /**
  * MCP Server for SSH operations
@@ -19,6 +22,7 @@ export class McpSshServer {
   private httpServer: ReturnType<typeof createServer> | null = null;
   private expressApp = express();
   private logger;
+  private transport: SSEServerTransport | StdioServerTransport | null = null;
 
   /**
    * Create a new MCP SSH server
@@ -58,6 +62,7 @@ export class McpSshServer {
       {
         capabilities: {
           tools: {},
+          prompts: {},
         },
       },
     );
@@ -189,8 +194,107 @@ export class McpSshServer {
               required: ["sessionId"],
             },
           },
+          {
+            name: "ssh.extractLogsByLineRange",
+            description: "Extract log entries from a file by line number range",
+            inputSchema: {
+              type: "object",
+              properties: {
+                sessionId: {
+                  type: "string",
+                  description: "Session ID from a previous successful connect call",
+                },
+                filePath: {
+                  type: "string",
+                  description: "Path to the log file on the remote server",
+                },
+                startLine: {
+                  type: "number",
+                  description: "Starting line number (1-indexed)",
+                },
+                endLine: {
+                  type: "number",
+                  description: "Ending line number (1-indexed, optional)",
+                },
+              },
+              required: ["sessionId", "filePath", "startLine"],
+            },
+          },
+          {
+            name: "ssh.extractLogsByTimeRange",
+            description: "Extract log entries from a file by time range",
+            inputSchema: {
+              type: "object",
+              properties: {
+                sessionId: {
+                  type: "string",
+                  description: "Session ID from a previous successful connect call",
+                },
+                filePath: {
+                  type: "string",
+                  description: "Path to the log file on the remote server",
+                },
+                targetTime: {
+                  type: "string",
+                  description: "Target time to extract logs around (e.g. '2023-05-15 14:30:00')",
+                },
+                timePattern: {
+                  type: "string",
+                  description:
+                    "Regular expression pattern to extract timestamps from log lines (e.g. '\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}')",
+                },
+                minutesRange: {
+                  type: "number",
+                  description: "Number of minutes before and after the target time to include",
+                },
+              },
+              required: ["sessionId", "filePath", "targetTime", "timePattern", "minutesRange"],
+            },
+          },
         ],
       };
+    });
+
+    // Handler that lists available prompts
+    this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+      this.logger.debug("Listing available prompts");
+      return {
+        prompts: LOG_ANALYSIS_PROMPTS,
+      };
+    });
+
+    // Handler for prompt retrieval
+    this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      const { name, arguments: args = {} } = request.params;
+      this.logger.debug(`Prompt retrieval: ${name}`, { args });
+
+      try {
+        // Find the prompt
+        const prompt = LOG_ANALYSIS_PROMPTS.find((p) => p.name === name);
+        if (!prompt) {
+          throw new Error(`Prompt not found: ${name}`);
+        }
+
+        // Get the generator for this prompt
+        const generator = PROMPT_GENERATORS[name];
+        if (!generator) {
+          throw new Error(`No message generator found for prompt: ${name}`);
+        }
+
+        // Generate the messages
+        const messages = generator(args);
+
+        return {
+          description: prompt.description,
+          messages,
+        };
+      } catch (error) {
+        this.logger.error(`Error handling prompt ${name}`, {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+        throw error;
+      }
     });
 
     // Handler for tool calls
@@ -298,10 +402,63 @@ export class McpSshServer {
           };
         }
 
+        case "ssh.extractLogsByLineRange": {
+          try {
+            const result = await this.sshService.extractLogsByLineRange(
+              String(args.sessionId),
+              String(args.filePath),
+              Number(args.startLine),
+              args.endLine ? Number(args.endLine) : undefined,
+            );
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(result),
+                },
+              ],
+            };
+          } catch (error) {
+            throw new Error(`Log extraction failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+
+        case "ssh.extractLogsByTimeRange": {
+          try {
+            const result = await this.sshService.extractLogsByTimeRange(
+              String(args.sessionId),
+              String(args.filePath),
+              String(args.targetTime),
+              String(args.timePattern),
+              Number(args.minutesRange),
+            );
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(result),
+                },
+              ],
+            };
+          } catch (error) {
+            throw new Error(`Log extraction failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
     });
+  }
+
+  /**
+   * Get the SSH service instance
+   * @returns The SSH service
+   */
+  public getSshService(): SshService {
+    return this.sshService;
   }
 
   /**
@@ -332,6 +489,31 @@ export class McpSshServer {
         resolve();
       });
     });
+  }
+
+  /**
+   * Start the MCP server in stdio mode (for direct LLM communication)
+   * @returns Promise that resolves when the server has started
+   */
+  public async startStdio(): Promise<void> {
+    this.logger.info("Starting MCP SSH Server in stdio mode");
+
+    // Create stdio transport
+    this.transport = new StdioServerTransport();
+
+    try {
+      // Connect to the transport
+      await this.server.connect(this.transport);
+      this.logger.info("MCP SSH Server running on stdio");
+    } catch (error) {
+      this.logger.error("Error connecting to stdio transport", {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      throw error;
+    }
+
+    return Promise.resolve();
   }
 
   /**
@@ -423,6 +605,18 @@ export class McpSshServer {
   public async stop(): Promise<void> {
     this.logger.info("Stopping MCP SSH Server");
     this.sshService.cleanup();
+
+    // Close the transport if it exists
+    if (this.transport) {
+      try {
+        await this.transport.close();
+        this.logger.info("Transport closed");
+      } catch (error) {
+        this.logger.error("Error closing transport", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     // Close the HTTP server if it exists
     if (this.httpServer) {
