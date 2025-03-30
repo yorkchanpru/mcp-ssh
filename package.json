@@ -1,5 +1,5 @@
 {
-  "name": "@yorkchanpru/mcp-ssh",
+  "name": "@york.chan.pru/mcp-ssh",
   "version": "0.0.1",
   "description": "MCP server for SSH access to remote virtual machines",
   "type": "module",
